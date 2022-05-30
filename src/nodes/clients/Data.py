@@ -1,0 +1,2 @@
+url = ["https://en.wikipedia.org/w/index.php?title=Databricks&oldid=1077382609"]
+customer_queries = ["What is the revenue?", "When was the company founded?", "What are the name of the founders?", "What are the products?", "What is the industry?", "What is the valuation of the company in dollars?", "What was the fundraising amount on the 8th round?", "What is the website?", "Where is the company headquartered in United States?", "Where are the operations?"]
