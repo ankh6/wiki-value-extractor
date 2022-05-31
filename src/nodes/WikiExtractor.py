@@ -1,6 +1,6 @@
 from typing import List
 from interfaces.Extractor import Extractor
-from utils.ExtractorUtils import set_custom_preprocessor
+from utils.ExtractorUtils import set_custom_preprocessor, predictive_model
 from clients.Data import customer_queries, url
 from haystack.document_stores import ElasticsearchDocumentStore
 from haystack.nodes import BM25Retriever, Crawler, FARMReader, TextConverter
@@ -27,7 +27,7 @@ class WikiExtractor(Extractor):
     def get_store(self):
         return self.store
     
-    def extract_content(self, source_files: List[str], customer_queries: List[str], max_answers : int =1):
+    def extract_content(self, source_files: List[str], customer_queries: List[str], predictive_model, max_answers : int =1):
         ''' Main Routine
         Extracts the content of a Wikipedia page and provides an answer to the queries, the context,
         the start and end offsets of the answer and a confidence score ranging from 0 to 1
@@ -53,7 +53,7 @@ class WikiExtractor(Extractor):
             # Writes documents to the Elastic store
             self.write_document_to_store(cleaned_documents)
             # Predicts answers given queries
-            predicted_answers = self.predict_answers_given_queries(customer_queries, max_answers)
+            predicted_answers = self.predict_answers_given_queries(customer_queries, predictive_model, max_answers)
             # Converts file content into a Question Answering format
             self.convert_content_to_QA_format(customer_queries,predicted_answers)
         except Exception as e :
@@ -71,8 +71,8 @@ class WikiExtractor(Extractor):
         store = self.get_store()
         store.write_documents(documents)
 
-    def predict_answers_given_queries(self, customer_queries: List[str], max_answers : int):
-        ''' Predicts answers given queries of the customer
+    def predict_answers_given_queries(self, customer_queries: List[str], predictive_model, max_answers : int):
+        ''' Predicts answers given customer queries
 
         Arguments:
         customer_queries, a list of queries to be answered in the document. Given by the customer
@@ -83,7 +83,7 @@ class WikiExtractor(Extractor):
         '''
         store = self.get_store()
         retriever = BM25Retriever(document_store=store)
-        reader = FARMReader(model_name_or_path="deepset/roberta-base-squad2", use_gpu=False)
+        reader = FARMReader(model_name_or_path=predictive_model, use_gpu=False)
         pipe = ExtractiveQAPipeline(reader,retriever)
         predicted_answers = []
         for single_query in customer_queries:
@@ -127,4 +127,4 @@ class WikiExtractor(Extractor):
 
 if __name__ == '__main__':
     wiki_extractor = WikiExtractor()
-    wiki_extractor.extract_content(url, customer_queries, max_answers=1)
+    wiki_extractor.extract_content(url, customer_queries, predictive_model, max_answers=1)
