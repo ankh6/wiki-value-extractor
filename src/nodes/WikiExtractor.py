@@ -4,15 +4,19 @@ from utils.ExtractorUtils import set_custom_preprocessor
 from clients.Data import customer_queries, url
 from haystack.document_stores import ElasticsearchDocumentStore
 from haystack.nodes import BM25Retriever, Crawler, FARMReader, TextConverter
-from haystack.pipelines import ExtractiveQAPipeline, Pipeline
-from haystack.schema import Answer, Document, EvaluationResult, Label, MultiLabel
-from haystack.utils import launch_es, print_answers
+from haystack.pipelines import ExtractiveQAPipeline
+from haystack.schema import Answer, Document
+from haystack.utils import launch_es
+
 
 class WikiExtractor(Extractor):
     def __init__(self):
         self.converter = TextConverter(valid_languages="en")
         self.crawler = Crawler(output_dir="crawled_files", crawler_depth=0, overwrite_existing_files=True)
-        self.store = ElasticsearchDocumentStore(host="localhost", index="document", duplicate_documents="overwrite")
+        # Spins up an Elastic instance.
+        # Throws a ConnectionError if connection fails
+        launch_es()
+        self.store = ElasticsearchDocumentStore(host="localhost", port="9200", index="document", duplicate_documents="overwrite")
 
     def get_converter(self):
         return self.converter
@@ -23,14 +27,17 @@ class WikiExtractor(Extractor):
     def get_store(self):
         return self.store
     
-    def read_page(self, source_files: List[str]):
-        ''' Reads a web page and writes the page content to a Store
+    def extract_content(self, source_files: List[str], customer_queries: List[str], max_answers : int =1):
+        ''' Main Routine
+        Extracts the content of a Wikipedia page and provides an answer to the queries, the context,
+        the start and end offsets of the answer and a confidence score ranging from 0 to 1
+
+        By default, the model uses the roberta-base-squad2 for its Reader component.
 
         Arguments:
-        source_files, a list of web pages to be crawled
-
-        Returns:
-
+        source_files, a list of Wikipedia pages
+        customer_queries, a list of queries to be answered in the document. Given by the customer
+        max_answers, an integer. It defines the number of neighbours that the model will rely on for prediction
         '''
         crawler = self.get_crawler()
         converter = self.get_converter()
@@ -42,20 +49,20 @@ class WikiExtractor(Extractor):
             # Processes the list of Documents
             processor = set_custom_preprocessor(clean_whitespace=True, clean_empty_lines=True, split_by="word", language="en")
             # Returns a list of processed documents given the process rules
-            cleaned_docs = processor.process(document_to_process)
+            cleaned_documents = processor.process(document_to_process)
             # Writes documents to the Elastic store
-            self.write_document_to_store(cleaned_docs)
+            self.write_document_to_store(cleaned_documents)
             # Predicts answers given queries
-            predicted_answers = self.predict_answers_given_queries(customer_queries)
+            predicted_answers = self.predict_answers_given_queries(customer_queries, max_answers)
             # Converts file content into a Question Answering format
             self.convert_content_to_QA_format(customer_queries,predicted_answers)
         except Exception as e :
-            print(f"Something wrong happened ! {e.args}")
+            print("Something wrong happened !")
             raise e
         finally:
-            print("Crawled content at ./crawled_files path")
+            print("Content file can be found at ./crawled_files folder")
             
-    def write_document_to_store(self, documents):
+    def write_document_to_store(self, documents: List[Document]):
         ''' Indexes documents to the ElasticSearch for later queries
 
         Arguments:
@@ -64,31 +71,38 @@ class WikiExtractor(Extractor):
         store = self.get_store()
         store.write_documents(documents)
 
-    def predict_answers_given_queries(self, queries):
+    def predict_answers_given_queries(self, customer_queries: List[str], max_answers : int):
         ''' Predicts answers given queries of the customer
 
         Arguments:
-        queries, a list of queries that the customer is interested in
+        customer_queries, a list of queries to be answered in the document. Given by the customer
+        max_answers, the maximum number of answers that the model provides
 
         Returns:
-        predicted_answers, a list of predicted answers. Same order in which the queries were given
-        
+        predicted_answers, a list of predicted answers. The answers are in the same order in which the queries were given
         '''
         store = self.get_store()
         retriever = BM25Retriever(document_store=store)
         reader = FARMReader(model_name_or_path="deepset/roberta-base-squad2", use_gpu=False)
         pipe = ExtractiveQAPipeline(reader,retriever)
         predicted_answers = []
-        for single_query in queries:
-            prediction = pipe.run(query=single_query,params={"Retriever":{"top_k": 1}, "Reader":{"top_k": 1}}, debug=True)
+        for single_query in customer_queries:
+            prediction = pipe.run(query=single_query,params={"Retriever":{"top_k": 1}, "Reader":{"top_k": max_answers}}, debug=True)
             predicted_answers.append(prediction["answers"])
         return predicted_answers
 
-    def convert_content_to_QA_format(self, customer_queries, predicted_answers):
+    def convert_content_to_QA_format(self, customer_queries: List[str], predicted_answers: List[Answer]):
+        ''' Converts the predicted answers into a format that is suitable for Haystack downstream tasks
+
+        Arguments:
+        customer_queries, a list of queries to be answered in the document. Given by the customer
+        predicted_answers, a list of predicted answers. The answers are in the same order in which the queries were given
+        
+        '''
         print("Received predicted answers: ", predicted_answers)
         # Customer queries and answers predicted by the model have the same index, i.e. order
         # Extracts the index of the query in its data structure
-        for query, answer in enumerate(predicted_answers):
+        for query_index, answer in enumerate(predicted_answers):
             answer = answer[0]
             text_to_QA_format = {
                 "data" : [
@@ -96,13 +110,21 @@ class WikiExtractor(Extractor):
                         "title" : "Relevant information",
                         "paragraphs": [
                             {
-                                "id" : answer.document_id,
-                                "query" : customer_queries[query],
-                                "answers" : [{"text": answer.answer, "answer_start": answer.offsets_in_document[0].start, "answer_end" : answer.offsets_in_document[0].end}],
-                                "context" : answer.context,
-                                "is_correct_answer" : answer.score
+                                "qas": [
+                                    {
+                                "document_id" : answer.document_id,
+                                "query" : customer_queries[query_index],
+                                "answers" : [{"text": answer.answer, "context":answer.context, "answer_start": answer.offsets_in_document[0].start, "answer_end" : answer.offsets_in_document[0].end}],
+                                "confidence_score" : answer.score }
+                                ]
                             }
                         ]
                     }
                 ]
             }
+            print(text_to_QA_format)
+
+
+if __name__ == '__main__':
+    wiki_extractor = WikiExtractor()
+    wiki_extractor.extract_content(url, customer_queries, max_answers=1)
