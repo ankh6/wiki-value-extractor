@@ -53,9 +53,9 @@ class WikiExtractor(Extractor):
             # Writes documents to the Elastic store
             self.write_document_to_store(cleaned_documents)
             # Predicts answers given queries
-            predicted_answers = self.predict_answers_given_queries(customer_queries, predictive_model, max_answers)
+            inferred_answers = self.infer_answers_given_queries(customer_queries, predictive_model, max_answers)
             # Converts file content into a Question Answering format
-            self.convert_content_to_QA_format(customer_queries,predicted_answers)
+            self.convert_content_to_QA_format(customer_queries,inferred_answers)
         except Exception as e :
             print("Something wrong happened !")
             raise e
@@ -71,7 +71,7 @@ class WikiExtractor(Extractor):
         store = self.get_store()
         store.write_documents(documents)
 
-    def predict_answers_given_queries(self, customer_queries: List[str], predictive_model, max_answers : int):
+    def infer_answers_given_queries(self, customer_queries: List[str], predictive_model, max_answers : int):
         ''' Predicts answers given customer queries
 
         Arguments:
@@ -79,30 +79,29 @@ class WikiExtractor(Extractor):
         max_answers, the maximum number of answers that the model provides
 
         Returns:
-        predicted_answers, a list of predicted answers. The answers are in the same order in which the queries were given
+        inferred_answers, a list of inferred answers. The answers are in the same order in which the queries were given
         '''
         store = self.get_store()
         retriever = BM25Retriever(document_store=store)
         reader = FARMReader(model_name_or_path=predictive_model, use_gpu=False)
         pipe = ExtractiveQAPipeline(reader,retriever)
-        predicted_answers = []
+        inferred_answers = []
         for single_query in customer_queries:
             prediction = pipe.run(query=single_query,params={"Retriever":{"top_k": 1}, "Reader":{"top_k": max_answers}}, debug=True)
-            predicted_answers.append(prediction["answers"])
-        return predicted_answers
+            inferred_answers.append(prediction["answers"])
+        return inferred_answers
 
-    def convert_content_to_QA_format(self, customer_queries: List[str], predicted_answers: List[Answer]):
-        ''' Converts the predicted answers into a format that is suitable for Haystack downstream tasks
+    def convert_content_to_QA_format(self, customer_queries: List[str], inferred_answers: List[Answer]):
+        ''' Converts the inferred answers into a format that is suitable for Haystack downstream tasks
 
         Arguments:
         customer_queries, a list of queries to be answered in the document. Given by the customer
-        predicted_answers, a list of predicted answers. The answers are in the same order in which the queries were given
+        inferred_answers, a list of inferred answers. The answers are in the same order in which the queries were given
         
         '''
-        print("Received predicted answers: ", predicted_answers)
-        # Customer queries and answers predicted by the model have the same index, i.e. order
+        # Customer queries and answers inferred by the model have the same index, i.e. order
         # Extracts the index of the query in its data structure
-        for query_index, answer in enumerate(predicted_answers):
+        for query_index, answer in enumerate(inferred_answers):
             answer = answer[0]
             text_to_QA_format = {
                 "data" : [
