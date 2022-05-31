@@ -5,8 +5,8 @@ class Extractor(metaclass=ABCMeta):
 
     @classmethod
     def __subclasshook__(cls, subclass):
-        return(hasattr(subclass,"read_page") and callable(subclass.read_page) or NotImplementedError)
+        return(hasattr(subclass,"extract_content") and callable(subclass.extract_content) or NotImplementedError)
 
     @abstractmethod
-    def read_page(self):
+    def extract_content(self):
         pass
